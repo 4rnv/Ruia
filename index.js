@@ -1,14 +1,15 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const axios = require('axios');
-const { Document, Packer, Paragraph, TextRun } = require('docx');
 const officegen = require('officegen');
 const fs = require('fs');
 const path = require('path');
+require('dotenv').config();
+
 const app = express();
 const port = 3000;
 
-const apiKey = '3a8b762e47324d578446d17cc79d9b89'; // Replace with your actual API key
+const apiKey = process.env.APIKEY; // Replace with your actual API key
 const endpoint = 'https://api.cognitive.microsofttranslator.com/translate?api-version=3.0';
 
 app.use(bodyParser.json());
@@ -35,49 +36,31 @@ async function translateText(text, targetLanguage) {
     }
 }
 
-// async function saveToDocx(text, filename) {
-//     const doc = new Document({
-//         sections: [
-//             {
-//                 properties: {},
-//                 children: [
-//                     new Paragraph({
-//                         children: [
-//                             new TextRun(text),
-//                         ],
-//                     }),
-//                 ],
-//             },
-//         ],
-//     });
+function saveToDocx(text, filename) {
+    return new Promise((resolve, reject) => {
+        const docx = officegen('docx');
 
-//     const packer = new Packer();
-//     const buffer = await packer.toBuffer(doc);
-//     fs.writeFileSync(filename, buffer);
-// }
+        docx.on('finalize', function(written) {
+            console.log('Document created with ' + written + ' bytes');
+            resolve();
+        });
 
-async function saveToDocx(text, filename) {
-    const docx = officegen('docx');
+        docx.on('error', function(err) {
+            console.log(err);
+            reject(err);
+        });
 
-    docx.on('finalize', function(written) {
-        console.log('Document created with ' + written + ' bytes');
+        // Create a new paragraph
+        const p = docx.createP();
+        p.addText(text);
+
+        // Generate the document
+        const out = fs.createWriteStream(filename);
+        out.on('finish', resolve);
+        out.on('error', reject);
+
+        docx.generate(out);
     });
-
-    docx.on('error', function(err) {
-        console.log(err);
-    });
-
-    // Create a new paragraph
-    const p = docx.createP();
-    p.addText(text);
-
-    // Generate the document
-    const out = fs.createWriteStream(filename);
-    out.on('error', function(err) {
-        console.log(err);
-    });
-
-    docx.generate(out);
 }
 
 app.post('/translate', async (req, res) => {
@@ -93,11 +76,21 @@ app.post('/translate', async (req, res) => {
         const translatedText = await translateText(text, targetLanguage);
         console.log('Text translated:', translatedText);
         let timestamp = Date.now();
-        const filename = path.join(__dirname, `${timestamp}.docx`);
+        const filename = `${timestamp}.docx`;
         console.log('Saving to docx file...');
         await saveToDocx(translatedText, filename);
+
         console.log('Sending file download...');
-        res.download(filename, `${timestamp}.docx`);
+        res.download(filename, `${timestamp}.docx`, (err) => {
+            if (err) {
+                console.error('Error sending file:', err);
+                res.status(500).json({ error: 'Failed to send the file.' });
+            } else {
+                fs.unlink(filename, (err) => {
+                    if (err) console.error('Failed to delete file:', err);
+                });
+            }
+        });
     } catch (error) {
         console.error('Error handling request:', error.message);
         res.status(500).json({ error: 'Failed to translate text.' });
